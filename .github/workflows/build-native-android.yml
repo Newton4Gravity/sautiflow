@@ -34,11 +34,21 @@ jobs:
           submodules: recursive
       
       - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
-        with:
-          api-level: 34
-          ndk-version: r27c
-          cmake-version: '3.22.1'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq wget unzip
+          ANDROID_SDK_ROOT=/usr/local/android-sdk
+          sudo mkdir -p $ANDROID_SDK_ROOT
+          cd $ANDROID_SDK_ROOT
+          sudo wget -q https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip -O cmdline-tools.zip
+          sudo unzip -q cmdline-tools.zip -d cmdline-tools
+          sudo mv cmdline-tools/cmdline-tools cmdline-tools/latest
+          export ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT
+          export PATH=$PATH:$ANDROID_SDK_ROOT/cmdline-tools/latest/bin:$ANDROID_SDK_ROOT/platform-tools
+          yes | sudo cmdline-tools/latest/bin/sdkmanager --licenses
+          sudo cmdline-tools/latest/bin/sdkmanager "platforms;android-34" "ndk;27.2.12479018" "cmake;3.22.1" "build-tools;34.0.0"
+          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT" >> $GITHUB_ENV
+          echo "ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/27.2.12479018" >> $GITHUB_ENV
       
       - name: Cache CMake build
         uses: actions/cache@v4
