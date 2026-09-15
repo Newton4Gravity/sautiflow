@@ -56,15 +56,15 @@ jobs:
           cmake -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake \
             -DANDROID_ABI=${{ github.event.inputs.abi }} \
             -DANDROID_PLATFORM=android-21 \
-            -DCMAKE_BUILD_TYPE=${{ github.event.inputs.build_type }} \
+            -DCMAKE_BUILD_TYPE=Debug \
             -DMINIAUDIODART_ENABLE_CURL=OFF \
-            -B .cxx/${{ github.event.inputs.build_type }}/${{ github.event.inputs.abi }} \
+            -B .cxx/Debug/${{ github.event.inputs.abi }} \
             -S .
       
       - name: Build native library
         working-directory: example/android/app
         run: |
-          cmake --build .cxx/${{ github.event.inputs.build_type }}/${{ github.event.inputs.abi }} --target audio_engine --config ${{ github.event.inputs.build_type }} -j$(nproc)
+          cmake --build .cxx/Debug/${{ github.event.inputs.abi }} --target audio_engine --config Debug -j$(nproc)
       
       - name: Find built libraries
         working-directory: example/android/app
@@ -91,7 +91,7 @@ jobs:
           retention-days: 7
 
   build-full-apk:
-    name: Build Full Flutter APK (${{ github.event.inputs.abi }}, ${{ github.event.inputs.build_type }})
+    name: Build Full Flutter APK (${{ github.event.inputs.abi }})
     runs-on: ubuntu-latest
     timeout-minutes: 60
     needs: build-native
@@ -121,7 +121,7 @@ jobs:
       - name: Build Flutter APK
         working-directory: ./sautiplay
         run: |
-          flutter build apk --${{ github.event.inputs.build_type | lower }} \
+          flutter build apk --${{ github.event.inputs.build_type }} \
             --target-platform android-${{ github.event.inputs.abi == 'armeabi-v7a' && 'arm' || 'arm64' }} \
             --split-per-abi \
             --no-pub
