@@ -128,10 +128,16 @@ jobs:
         working-directory: ./sautiplay
         run: flutter pub get
       
+      - name: Generate Splash & Launcher Icons
+        working-directory: ./sautiplay
+        run: |
+          dart run flutter_launcher_icons
+          dart run flutter_native_splash:create
+      
       - name: Build Flutter APK
         working-directory: ./sautiplay
         run: |
-          flutter build apk --${{ github.event.inputs.build_type }} \
+          flutter build apk --release \
             --target-platform android-${{ github.event.inputs.abi == 'armeabi-v7a' && 'arm' || 'arm64' }} \
             --split-per-abi \
             --no-pub
