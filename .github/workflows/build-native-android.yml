@@ -60,38 +60,38 @@ jobs:
           restore-keys: |
             cmake-${{ runner.os }}-${{ github.event.inputs.abi }}-${{ github.event.inputs.build_type }}-
       
-      - name: Configure CMake (example app - builds native lib)
-        working-directory: example/android/app
+      - name: Configure CMake (Android library)
+        working-directory: android/src/main/cpp
         run: |
           cmake -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake \
             -DANDROID_ABI=${{ github.event.inputs.abi }} \
             -DANDROID_PLATFORM=android-21 \
             -DCMAKE_BUILD_TYPE=Debug \
             -DMINIAUDIODART_ENABLE_CURL=OFF \
-            -B .cxx/Debug/${{ github.event.inputs.abi }} \
+            -B build/${{ github.event.inputs.abi }} \
             -S .
       
       - name: Build native library
-        working-directory: example/android/app
+        working-directory: android/src/main/cpp
         run: |
-          cmake --build .cxx/Debug/${{ github.event.inputs.abi }} --target audio_engine --config Debug -j$(nproc)
+          cmake --build build/${{ github.event.inputs.abi }} --target audio_engine --config Debug -j$(nproc)
       
       - name: Find built libraries
-        working-directory: example/android/app
+        working-directory: android/src/main/cpp
         run: |
-          find .cxx -name "libsautiflow.so" -o -name "libaudio_engine.so" | head -20
-          ls -la .cxx/${{ github.event.inputs.build_type }}/${{ github.event.inputs.abi }}/
+          find build -name "libsautiflow.so" -o -name "libaudio_engine.so" | head -20
+          ls -la build/${{ github.event.inputs.abi }}/
       
       - name: Copy libraries to artifact directory
-        working-directory: example/android/app
+        working-directory: android/src/main/cpp
         run: |
-          mkdir -p ../../../build-artifacts/${{ github.event.inputs.abi }}/${{ github.event.inputs.build_type }}
-          find .cxx -name "libsautiflow.so" -exec cp {} ../../../build-artifacts/${{ github.event.inputs.abi }}/${{ github.event.inputs.build_type }}/ \;
-          find .cxx -name "libaudio_engine.so" -exec cp {} ../../../build-artifacts/${{ github.event.inputs.abi }}/${{ github.event.inputs.build_type }}/ \;
+          mkdir -p ../../../../build-artifacts/${{ github.event.inputs.abi }}/${{ github.event.inputs.build_type }}
+          find build -name "libsautiflow.so" -exec cp {} ../../../../build-artifacts/${{ github.event.inputs.abi }}/${{ github.event.inputs.build_type }}/ \;
+          find build -name "libaudio_engine.so" -exec cp {} ../../../../build-artifacts/${{ github.event.inputs.abi }}/${{ github.event.inputs.build_type }}/ \;
           # Also copy FFmpeg dependencies
-          find .cxx -name "libav*.so" -exec cp {} ../../../build-artifacts/${{ github.event.inputs.abi }}/${{ github.event.inputs.build_type }}/ \;
-          find .cxx -name "libswresample.so" -exec cp {} ../../../build-artifacts/${{ github.event.inputs.abi }}/${{ github.event.inputs.build_type }}/ \;
-          ls -la ../../../build-artifacts/${{ github.event.inputs.abi }}/${{ github.event.inputs.build_type }}/
+          find build -name "libav*.so" -exec cp {} ../../../../build-artifacts/${{ github.event.inputs.abi }}/${{ github.event.inputs.build_type }}/ \;
+          find build -name "libswresample.so" -exec cp {} ../../../../build-artifacts/${{ github.event.inputs.abi }}/${{ github.event.inputs.build_type }}/ \;
+          ls -la ../../../../build-artifacts/${{ github.event.inputs.abi }}/${{ github.event.inputs.build_type }}/
       
       - name: Upload native libraries
         uses: actions/upload-artifact@v4
