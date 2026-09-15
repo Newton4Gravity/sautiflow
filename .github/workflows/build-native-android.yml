@@ -36,8 +36,8 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
         with:
-          api-level: 36
-          ndk-version: r28c
+          api-level: 34
+          ndk-version: r27c
           cmake-version: '3.22.1'
       
       - name: Cache CMake build
