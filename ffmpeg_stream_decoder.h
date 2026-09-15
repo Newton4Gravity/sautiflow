@@ -146,6 +146,10 @@ private:
 
     StreamTelemetry m_telemetry;
     StreamTelemetryCallback m_telemetryCb;
+
+    // For buffering timeout tracking
+    std::chrono::steady_clock::time_point m_bufferingStartTime;
+    bool m_bufferingTimeoutLogged{false};
 };
 
 // Global telemetry accessor for active engine streams

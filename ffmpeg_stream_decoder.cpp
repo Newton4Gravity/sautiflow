@@ -118,6 +118,8 @@ FFmpegStreamSource::FFmpegStreamSource() {
     std::call_once(initFlag, []() {
         avformat_network_init();
     });
+    m_bufferingStartTime = std::chrono::steady_clock::now();
+    m_bufferingTimeoutLogged = false;
 }
 
 FFmpegStreamSource::~FFmpegStreamSource() {
@@ -186,6 +188,8 @@ bool FFmpegStreamSource::open(const std::string& url, int targetSampleRate, int 
         m_rebufferBytes = rebufferFrames;
 
         m_isBuffering.store(true, std::memory_order_release);
+        m_bufferingStartTime = std::chrono::steady_clock::now();
+        m_bufferingTimeoutLogged = false;
     } else {
         // Local file - instant playback from disk with zero prebuffering delay
         m_prebufferBytes = 0;
@@ -282,11 +286,52 @@ size_t FFmpegStreamSource::read_pcm(float* pOut, size_t frameCount) {
                 m_telemetry.state = StreamState::Playing;
             }
             notify_telemetry();
+            SF_LOG("[ffmpeg] BUFFERING EXIT: available=%.2fs, rebuffer=%.2fs, ended=%d\n",
+                   (double)available / m_targetSampleRate,
+                   (double)m_rebufferBytes / m_targetSampleRate,
+                   m_isEnded.load(std::memory_order_relaxed) ? 1 : 0);
         } else {
-            // Fill with silence while buffering and return 0 frames to prevent timeline drift
-            std::fill(pOut, pOut + frameCount * m_targetChannels, 0.0f);
-            return 0;
+            // Diagnostic logging every 500ms while buffering
+            auto now = std::chrono::steady_clock::now();
+            auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(now - m_bufferingStartTime).count();
+            
+            static constexpr int64_t LOG_INTERVAL_MS = 500;
+            static thread_local int64_t lastLogTime = 0;
+            if (elapsedMs - lastLogTime >= LOG_INTERVAL_MS) {
+                lastLogTime = elapsedMs;
+                double bufferedSec = (double)available / m_targetSampleRate;
+                double rebufferSec = (double)m_rebufferBytes / m_targetSampleRate;
+                double pct = rebufferSec > 0 ? (bufferedSec / rebufferSec) * 100.0 : 0.0;
+                SF_LOG("[ffmpeg] BUFFERING: elapsed=%ld ms, buffered=%.2fs/%.2fs (%.1f%%), ended=%d\n",
+                       elapsedMs, bufferedSec, rebufferSec, pct,
+                       m_isEnded.load(std::memory_order_relaxed) ? 1 : 0);
+            }
+
+            // Maximum buffering timeout: force exit after 10 seconds to prevent permanent silence
+            static constexpr int64_t MAX_BUFFERING_MS = 10000;
+            if (elapsedMs >= MAX_BUFFERING_MS && !m_bufferingTimeoutLogged) {
+                m_bufferingTimeoutLogged = true;
+                SF_LOGE("[ffmpeg] BUFFERING TIMEOUT: forced exit after %ld ms (available=%.2fs, rebuffer=%.2fs)\n",
+                        elapsedMs, (double)available / m_targetSampleRate, (double)m_rebufferBytes / m_targetSampleRate);
+                m_isBuffering.store(false, std::memory_order_release);
+                {
+                    std::lock_guard<std::mutex> lock(m_stateMutex);
+                    m_telemetry.state = StreamState::Playing;
+                }
+                notify_telemetry();
+            } else if (elapsedMs < MAX_BUFFERING_MS) {
+                // Fill with silence while buffering and return 0 frames to prevent timeline drift
+                std::fill(pOut, pOut + frameCount * m_targetChannels, 0.0f);
+                return 0;
+            }
+            // If timeout expired, fall through to attempt playback with whatever we have
         }
+    }
+
+    // Reset buffering start time when we have data and are not buffering
+    if (!m_isBuffering.load(std::memory_order_relaxed) && available > 0) {
+        m_bufferingStartTime = std::chrono::steady_clock::now();
+        m_bufferingTimeoutLogged = false;
     }
 
     if (available == 0) {
@@ -300,11 +345,14 @@ size_t FFmpegStreamSource::read_pcm(float* pOut, size_t frameCount) {
         }
         // Jitter underrun: enter buffering mode
         m_isBuffering.store(true, std::memory_order_release);
+        m_bufferingStartTime = std::chrono::steady_clock::now();
+        m_bufferingTimeoutLogged = false;
         {
             std::lock_guard<std::mutex> lock(m_stateMutex);
             m_telemetry.state = StreamState::Buffering;
         }
         notify_telemetry();
+        SF_LOG("[ffmpeg] JITTER UNDERRUN: re-entered buffering mode\n");
         std::fill(pOut, pOut + frameCount * m_targetChannels, 0.0f);
         return 0;
     }
@@ -443,6 +491,16 @@ void FFmpegStreamSource::demux_and_decode_thread_func() {
     AVStream* audioStream = m_fmtCtx->streams[m_audioStreamIndex];
     SF_LOG("[ffmpeg] Step 2/5 SUCCESS: Found audio stream (index=%d, codec=%s, rate=%d Hz, channels=%d)\n",
            m_audioStreamIndex, decoder->name, audioStream->codecpar->sample_rate, audioStream->codecpar->ch_layout.nb_channels);
+
+    // Reduce rebuffer threshold for Opus codec (low bitrate, prone to buffering stalls on mobile)
+    if (isNetwork && decoder && std::strcmp(decoder->name, "opus") == 0) {
+        // Opus at ~150kbps: 3s rebuffer = ~56KB, but network can stall; reduce to 1s for faster startup
+        size_t opusRebufferFrames = m_targetSampleRate * 1; // 1 second
+        if (opusRebufferFrames < m_rebufferBytes) {
+            m_rebufferBytes = opusRebufferFrames;
+            SF_LOG("[ffmpeg] Opus detected: reduced rebuffer threshold to %.2fs\n", 1.0);
+        }
+    }
 
     m_codecCtx = avcodec_alloc_context3(decoder);
     if (!m_codecCtx) {

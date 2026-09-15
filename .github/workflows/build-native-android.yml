@@ -1,0 +1,134 @@
+name: Build Native Android Library
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_type:
+        description: 'Build type'
+        required: false
+        default: 'Debug'
+        type: choice
+        options:
+          - Debug
+          - Release
+      abi:
+        description: 'Target ABI'
+        required: false
+        default: 'arm64-v8a'
+        type: choice
+        options:
+          - armeabi-v7a
+          - arm64-v8a
+          - x86_64
+
+jobs:
+  build-native:
+    name: Build Native (${{ github.event.inputs.abi }}, ${{ github.event.inputs.build_type }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          api-level: 36
+          ndk-version: r28c
+          cmake-version: '3.22.1'
+      
+      - name: Cache CMake build
+        uses: actions/cache@v4
+        with:
+          path: |
+            example/android/app/.cxx
+            android/src/main/cpp/build
+          key: cmake-${{ runner.os }}-${{ github.event.inputs.abi }}-${{ github.event.inputs.build_type }}-${{ hashFiles('**/CMakeLists.txt', '**/build.gradle*') }}
+          restore-keys: |
+            cmake-${{ runner.os }}-${{ github.event.inputs.abi }}-${{ github.event.inputs.build_type }}-
+      
+      - name: Configure CMake (example app - builds native lib)
+        working-directory: example/android/app
+        run: |
+          cmake -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake \
+            -DANDROID_ABI=${{ github.event.inputs.abi }} \
+            -DANDROID_PLATFORM=android-21 \
+            -DCMAKE_BUILD_TYPE=${{ github.event.inputs.build_type }} \
+            -DMINIAUDIODART_ENABLE_CURL=OFF \
+            -B .cxx/${{ github.event.inputs.build_type }}/${{ github.event.inputs.abi }} \
+            -S .
+      
+      - name: Build native library
+        working-directory: example/android/app
+        run: |
+          cmake --build .cxx/${{ github.event.inputs.build_type }}/${{ github.event.inputs.abi }} --target audio_engine --config ${{ github.event.inputs.build_type }} -j$(nproc)
+      
+      - name: Find built libraries
+        working-directory: example/android/app
+        run: |
+          find .cxx -name "libsautiflow.so" -o -name "libaudio_engine.so" | head -20
+          ls -la .cxx/${{ github.event.inputs.build_type }}/${{ github.event.inputs.abi }}/
+      
+      - name: Copy libraries to artifact directory
+        working-directory: example/android/app
+        run: |
+          mkdir -p ../../../build-artifacts/${{ github.event.inputs.abi }}/${{ github.event.inputs.build_type }}
+          find .cxx -name "libsautiflow.so" -exec cp {} ../../../build-artifacts/${{ github.event.inputs.abi }}/${{ github.event.inputs.build_type }}/ \;
+          find .cxx -name "libaudio_engine.so" -exec cp {} ../../../build-artifacts/${{ github.event.inputs.abi }}/${{ github.event.inputs.build_type }}/ \;
+          # Also copy FFmpeg dependencies
+          find .cxx -name "libav*.so" -exec cp {} ../../../build-artifacts/${{ github.event.inputs.abi }}/${{ github.event.inputs.build_type }}/ \;
+          find .cxx -name "libswresample.so" -exec cp {} ../../../build-artifacts/${{ github.event.inputs.abi }}/${{ github.event.inputs.build_type }}/ \;
+          ls -la ../../../build-artifacts/${{ github.event.inputs.abi }}/${{ github.event.inputs.build_type }}/
+      
+      - name: Upload native libraries
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-libs-${{ github.event.inputs.abi }}-${{ github.event.inputs.build_type }}
+          path: build-artifacts/${{ github.event.inputs.abi }}/${{ github.event.inputs.build_type }}/
+          retention-days: 7
+
+  build-full-apk:
+    name: Build Full Flutter APK (${{ github.event.inputs.abi }}, ${{ github.event.inputs.build_type }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    needs: build-native
+    if: github.event.inputs.build_type == 'Release'
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: "zulu"
+          java-version: "17"
+      
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: "stable"
+      
+      - name: Install dependencies
+        working-directory: ./sautiplay
+        run: flutter pub get
+      
+      - name: Build Flutter APK
+        working-directory: ./sautiplay
+        run: |
+          flutter build apk --${{ github.event.inputs.build_type | lower }} \
+            --target-platform android-${{ github.event.inputs.abi == 'armeabi-v7a' && 'arm' || 'arm64' }} \
+            --split-per-abi \
+            --no-pub
+      
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: apk-${{ github.event.inputs.abi }}-${{ github.event.inputs.build_type }}
+          path: sautiplay/build/app/outputs/flutter-apk/
+          retention-days: 7
